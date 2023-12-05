@@ -913,6 +913,7 @@ pub mod ffi {
         #[cxx_name = "SetTranslationPart"]
         pub fn set_translation_vec(self: Pin<&mut gp_Trsf>, translation: &gp_Vec);
 
+<<<<<<< HEAD
         type BRepBuilderAPI_MakeSolid;
 
         #[cxx_name = "construct_unique"]
@@ -924,6 +925,8 @@ pub mod ffi {
         pub fn Build(self: Pin<&mut BRepBuilderAPI_MakeSolid>, progress: &Message_ProgressRange);
         pub fn IsDone(self: &BRepBuilderAPI_MakeSolid) -> bool;
 
+=======
+>>>>>>> bschwind/main
         type BRepBuilderAPI_MakeShapeOnMesh;
 
         #[cxx_name = "construct_unique"]
