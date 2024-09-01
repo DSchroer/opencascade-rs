@@ -2,14 +2,14 @@ use std::iter::once;
 
 use crate::{
     angle::{Angle, ToAngle},
-    primitives::{make_dir, make_point, make_vec, Edge, Face, JoinType, Shape},
+    law_function::law_function_from_graph,
+    make_pipe_shell::make_pipe_shell_with_law_function,
+    primitives::{make_dir, make_point, make_vec, Edge, Face, JoinType, Shape, Shell},
     Error,
 };
 use cxx::UniquePtr;
 use glam::{dvec3, DVec3};
 use opencascade_sys::ffi;
-
-use crate::primitives::Shell;
 
 pub struct Wire {
     pub(crate) inner: UniquePtr<ffi::TopoDS_Wire>,
@@ -202,6 +202,24 @@ impl Wire {
         Shell::from_shell(result_shell)
     }
 
+    /// Sweep the wire along a path, modulated by a function, to produce a shell
+    #[must_use]
+    pub fn sweep_along_with_radius_values(
+        &self,
+        path: &Wire,
+        radius_values: impl IntoIterator<Item = (f64, f64)>,
+    ) -> Shell {
+        let law_function = law_function_from_graph(radius_values);
+        let law_handle = ffi::Law_Function_to_handle(law_function);
+
+        let mut make_pipe_shell =
+            make_pipe_shell_with_law_function(&self.inner, &path.inner, &law_handle);
+        let pipe_shape = make_pipe_shell.pin_mut().Shape();
+        let result_shell = ffi::TopoDS_cast_to_shell(pipe_shape);
+
+        Shell::from_shell(result_shell)
+    }
+
     #[must_use]
     pub fn translate(&self, offset: DVec3) -> Self {
         self.transform(offset, dvec3(1.0, 0.0, 0.0), 0.degrees())
@@ -238,4 +256,30 @@ impl Wire {
 
     // Create a closure-based API
     pub fn freeform() {}
+}
+
+pub struct WireBuilder {
+    inner: UniquePtr<ffi::BRepBuilderAPI_MakeWire>,
+}
+
+impl Default for WireBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WireBuilder {
+    pub fn new() -> Self {
+        let make_wire = ffi::BRepBuilderAPI_MakeWire_ctor();
+
+        Self { inner: make_wire }
+    }
+
+    pub fn add_edge(&mut self, edge: &Edge) {
+        self.inner.pin_mut().add_edge(&edge.inner);
+    }
+
+    pub fn build(self) -> Wire {
+        Wire::from_make_wire(self.inner)
+    }
 }

@@ -1,10 +1,11 @@
 use crate::{
     edge_drawer::{EdgeDrawer, LineBuilder, LineVertex3, RenderedLine},
     surface_drawer::{CadMesh, SurfaceDrawer},
+    wasm_engine::WasmEngine,
 };
 use anyhow::Error;
 use camera::OrbitCamera;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use glam::{vec2, vec3, DVec3, Mat4, Quat, Vec2, Vec3};
 use kicad_parser::board::BoardLayer;
 use opencascade::{
@@ -32,6 +33,7 @@ use winit::{
 mod camera;
 mod edge_drawer;
 mod surface_drawer;
+mod wasm_engine;
 
 // Multipliers to convert mouse position deltas to a more intuitve camera perspective change.
 const ZOOM_MULTIPLIER: f32 = 5.0;
@@ -78,6 +80,7 @@ struct ViewerApp {
     rendered_edges: RenderedLine,
     cad_mesh: CadMesh,
     mouse_state: MouseState,
+    wasm_engine: Option<WasmEngine>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -89,44 +92,46 @@ struct AppArgs {
     kicad_file: Option<PathBuf>,
 
     #[arg(long, value_enum, group = "model")]
-    example: Option<Example>,
+    example: Option<examples::Example>,
+
+    #[arg(long, value_enum, group = "model")]
+    wasm_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, ValueEnum)]
-enum Example {
-    Airfoil,
-    BoxShape,
-    Chamfer,
-    Gizmo,
-    HighLevelBottle,
-    KeyboardCase,
-    Keycap,
-    Offset2d,
-    RoundedChamfer,
-    SweptFace,
-    SweptWire,
-    TurnersCube,
-    VariableFillet,
+fn get_shape_mesh(shape: &Shape, graphics_device: &GraphicsDevice) -> CadMesh {
+    let mesh = shape.mesh().expect("example shape should yield a valid triangulation");
+    CadMesh::from_mesh(&mesh, graphics_device.device())
 }
 
-impl Example {
-    pub fn shape(self) -> Shape {
-        match self {
-            Example::Airfoil => examples::airfoil::shape(),
-            Example::BoxShape => examples::box_shape::shape(),
-            Example::Chamfer => examples::chamfer::shape(),
-            Example::Gizmo => examples::gizmo::shape(),
-            Example::HighLevelBottle => examples::high_level_bottle::shape(),
-            Example::KeyboardCase => examples::keyboard_case::shape(),
-            Example::Keycap => examples::keycap::shape(),
-            Example::Offset2d => examples::offset_2d::shape(),
-            Example::RoundedChamfer => examples::rounded_chamfer::shape(),
-            Example::SweptFace => examples::swept_face::shape(),
-            Example::SweptWire => examples::swept_wire::shape(),
-            Example::TurnersCube => examples::turners_cube::shape(),
-            Example::VariableFillet => examples::variable_fillet::shape(),
+fn get_shape_edges(shape: &Shape, graphics_device: &GraphicsDevice) -> RenderedLine {
+    // Pre-render the model edges.
+    let line_thickness = 3.0;
+    let mut line_builder = LineBuilder::new();
+
+    for edge in shape.edges() {
+        let mut segments = vec![];
+
+        let mut last_point: Option<DVec3> = None;
+        let mut length_so_far = 0.0;
+
+        for point in edge.approximation_segments() {
+            if let Some(last_point) = last_point {
+                length_so_far += (point - last_point).length();
+            }
+
+            segments.push(LineVertex3::new(
+                vec3(point.x as f32, point.y as f32, point.z as f32),
+                line_thickness,
+                length_so_far as f32,
+            ));
+
+            last_point = Some(point);
         }
+
+        line_builder.add_round_line_strip(&segments);
     }
+
+    line_builder.build(graphics_device.device())
 }
 
 impl GameApp for ViewerApp {
@@ -136,6 +141,8 @@ impl GameApp for ViewerApp {
 
     fn init(graphics_device: &mut GraphicsDevice) -> Self {
         let args = AppArgs::parse();
+
+        let mut wasm_engine = None;
 
         let shape = if let Some(step_file) = args.step_file {
             Shape::read_step(step_file).expect("Failed to read STEP file, {step_file}")
@@ -151,42 +158,25 @@ impl GameApp for ViewerApp {
             // pcb.edge_cuts().to_face().extrude(glam::dvec3(0.0, 0.0, 1.6)).into()
         } else if let Some(example) = args.example {
             example.shape()
+        } else if let Some(wasm_path) = args.wasm_path {
+            let engine = WasmEngine::new(wasm_path);
+            let shape = engine.shape();
+            wasm_engine = Some(engine);
+
+            match shape {
+                Ok(shape) => shape,
+                Err(err) => {
+                    eprintln!("Error occurred while executing the model code: {err} - starting with a default cube.");
+                    Shape::cube_centered(50.0)
+                },
+            }
         } else {
             eprintln!("Warning - no example or STEP file specified, you get a default cube.");
             Shape::cube_centered(50.0)
         };
 
-        let mesh = shape.mesh().expect("example shape should yield a valid triangulation");
-        let cad_mesh = CadMesh::from_mesh(&mesh, graphics_device.device());
-
-        // Pre-render the model edges.
-        let line_thickness = 3.0;
-        let mut line_builder = LineBuilder::new();
-
-        for edge in shape.edges() {
-            let mut segments = vec![];
-
-            let mut last_point: Option<DVec3> = None;
-            let mut length_so_far = 0.0;
-
-            for point in edge.approximation_segments() {
-                if let Some(last_point) = last_point {
-                    length_so_far += (point - last_point).length();
-                }
-
-                segments.push(LineVertex3::new(
-                    vec3(point.x as f32, point.y as f32, point.z as f32),
-                    line_thickness,
-                    length_so_far as f32,
-                ));
-
-                last_point = Some(point);
-            }
-
-            line_builder.add_round_line_strip(&segments);
-        }
-
-        let rendered_edges = line_builder.build(graphics_device.device());
+        let cad_mesh = get_shape_mesh(&shape, graphics_device);
+        let rendered_edges = get_shape_edges(&shape, graphics_device);
 
         // Create SMAA target
         let (width, height) = graphics_device.surface_dimensions();
@@ -224,6 +214,7 @@ impl GameApp for ViewerApp {
             cad_mesh,
             rendered_edges,
             mouse_state: Default::default(),
+            wasm_engine,
         }
     }
 
@@ -290,12 +281,18 @@ impl GameApp for ViewerApp {
                 self.camera.zoom(-zoom_delta);
             },
             WindowEvent::KeyboardInput {
-                event: KeyEvent { physical_key: PhysicalKey::Code(key_code), .. },
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(key_code),
+                        state: ElementState::Pressed,
+                        ..
+                    },
                 ..
             } => match key_code {
                 KeyCode::Escape => window_target.exit(),
                 KeyCode::KeyP => self.camera.use_perspective(),
                 KeyCode::KeyO => self.camera.use_orthographic(),
+                KeyCode::KeyX => self.line_drawer.toggle_back_edge_drawing(),
                 _ => {},
             },
             _ => {},
@@ -305,6 +302,21 @@ impl GameApp for ViewerApp {
     fn tick(&mut self, _dt: f32) {}
 
     fn render(&mut self, graphics_device: &mut GraphicsDevice, _window: &Window) {
+        if let Some(wasm_engine) = &mut self.wasm_engine {
+            let start = std::time::Instant::now();
+            match wasm_engine.new_shape_if_wasm_changed() {
+                Some(Ok(new_shape)) => {
+                    self.cad_mesh = get_shape_mesh(&new_shape, graphics_device);
+                    self.rendered_edges = get_shape_edges(&new_shape, graphics_device);
+                    println!("Created a new shape in {:?}", start.elapsed());
+                },
+                Some(Err(err)) => {
+                    println!("Error occurred while executing the model code: {err}");
+                },
+                _ => {},
+            }
+        }
+
         let mut frame_encoder = graphics_device.begin_frame();
 
         let smaa_render_target = self.smaa_target.start_frame(

@@ -77,6 +77,7 @@ pub mod ffi {
         // Handles
         type HandleStandardType;
         type HandleGeomCurve;
+        type HandleGeomBSplineCurve;
         type HandleGeomTrimmedCurve;
         type HandleGeomSurface;
         type HandleGeomBezierSurface;
@@ -86,9 +87,20 @@ pub mod ffi {
         type HandleGeom2d_TrimmedCurve;
         type HandleGeom_CylindricalSurface;
         type Handle_TopTools_HSequenceOfShape;
+        type HandleLawFunction;
+
+        type Handle_TColgpHArray1OfPnt;
+        pub fn new_HandleTColgpHArray1OfPnt_from_TColgpHArray1OfPnt(
+            array: UniquePtr<TColgp_HArray1OfPnt>,
+        ) -> UniquePtr<Handle_TColgpHArray1OfPnt>;
 
         pub fn DynamicType(surface: &HandleGeomSurface) -> &HandleStandardType;
         pub fn type_name(handle: &HandleStandardType) -> String;
+
+        #[cxx_name = "construct_unique"]
+        pub fn new_HandleGeomCurve_from_HandleGeom_BSplineCurve(
+            bspline_curve_handle: &HandleGeomBSplineCurve,
+        ) -> UniquePtr<HandleGeomCurve>;
 
         #[cxx_name = "construct_unique"]
         pub fn new_HandleGeomCurve_from_HandleGeom_TrimmedCurve(
@@ -210,6 +222,19 @@ pub mod ffi {
         ) -> UniquePtr<TColgp_Array2OfPnt>;
         pub fn SetValue(self: Pin<&mut TColgp_Array2OfPnt>, row: i32, column: i32, item: &gp_Pnt);
 
+        type TColgp_HArray1OfPnt;
+        #[cxx_name = "construct_unique"]
+        pub fn TColgp_HArray1OfPnt_ctor(
+            lower_bound: i32,
+            upper_bound: i32,
+        ) -> UniquePtr<TColgp_HArray1OfPnt>;
+        pub fn Length(self: &TColgp_HArray1OfPnt) -> i32;
+        pub fn TColgp_HArray1OfPnt_Value(
+            array: &TColgp_HArray1OfPnt,
+            index: i32,
+        ) -> UniquePtr<gp_Pnt>;
+        pub fn SetValue(self: Pin<&mut TColgp_HArray1OfPnt>, index: i32, item: &gp_Pnt);
+
         type TopTools_HSequenceOfShape;
 
         pub fn Length(self: &TopTools_HSequenceOfShape) -> i32;
@@ -230,6 +255,23 @@ pub mod ffi {
         pub fn Handle_TopTools_HSequenceOfShape_Get(
             handle: &Handle_TopTools_HSequenceOfShape,
         ) -> Result<&TopTools_HSequenceOfShape>;
+
+        // Law Function
+        type Law_Function;
+
+        pub fn Law_Function_to_handle(law: UniquePtr<Law_Function>)
+            -> UniquePtr<HandleLawFunction>;
+
+        // Law Interpol
+
+        type Law_Interpol;
+
+        #[cxx_name = "construct_unique"]
+        pub fn Law_Interpol_ctor() -> UniquePtr<Law_Interpol>;
+        pub fn Law_Interpol_into_Law_Function(
+            interpol: UniquePtr<Law_Interpol>,
+        ) -> UniquePtr<Law_Function>;
+        pub fn Set(self: Pin<&mut Law_Interpol>, array: &TColgp_Array1OfPnt2d, periodic: bool);
 
         // Geometry
         type Geom_TrimmedCurve;
@@ -782,6 +824,35 @@ pub mod ffi {
 
         pub fn Shape(self: Pin<&mut BRepOffsetAPI_MakePipe>) -> &TopoDS_Shape;
 
+        // Sweeps with a law function
+        type BRepOffsetAPI_MakePipeShell;
+
+        #[cxx_name = "construct_unique"]
+        pub fn BRepOffsetAPI_MakePipeShell_ctor(
+            spine: &TopoDS_Wire,
+        ) -> UniquePtr<BRepOffsetAPI_MakePipeShell>;
+
+        pub fn SetMode(self: Pin<&mut BRepOffsetAPI_MakePipeShell>, is_frenet: bool);
+
+        pub fn Add(
+            self: Pin<&mut BRepOffsetAPI_MakePipeShell>,
+            profile: &TopoDS_Shape,
+            with_contact: bool,
+            with_correction: bool,
+        );
+
+        pub fn SetLaw(
+            self: Pin<&mut BRepOffsetAPI_MakePipeShell>,
+            profile: &TopoDS_Shape,
+            law: &HandleLawFunction,
+            with_contact: bool,
+            with_correction: bool,
+        );
+
+        pub fn Build(self: Pin<&mut BRepOffsetAPI_MakePipeShell>, progress: &Message_ProgressRange);
+        pub fn MakeSolid(self: Pin<&mut BRepOffsetAPI_MakePipeShell>) -> bool;
+        pub fn Shape(self: Pin<&mut BRepOffsetAPI_MakePipeShell>) -> &TopoDS_Shape;
+
         // Lofting
         type BRepOffsetAPI_ThruSections;
 
@@ -888,6 +959,29 @@ pub mod ffi {
         #[cxx_name = "construct_unique"]
         pub fn gp_Ax2d_ctor(point: &gp_Pnt2d, dir: &gp_Dir2d) -> UniquePtr<gp_Ax2d>;
 
+        // Geometry Interpolation
+        type GeomAPI_Interpolate;
+
+        #[cxx_name = "construct_unique"]
+        pub fn GeomAPI_Interpolate_ctor(
+            points: &Handle_TColgpHArray1OfPnt,
+            periodic: bool,
+            tolerance: f64,
+        ) -> UniquePtr<GeomAPI_Interpolate>;
+
+        pub fn Load(
+            self: Pin<&mut GeomAPI_Interpolate>,
+            initial_tangent: &gp_Vec,
+            final_tangent: &gp_Vec,
+            scale: bool,
+        );
+
+        pub fn Perform(self: Pin<&mut GeomAPI_Interpolate>);
+
+        pub fn GeomAPI_Interpolate_Curve(
+            interpolate: &GeomAPI_Interpolate,
+        ) -> UniquePtr<HandleGeomBSplineCurve>;
+
         // Geometry Querying
         type GeomAPI_ProjectPointOnSurf;
 
@@ -909,9 +1003,16 @@ pub mod ffi {
         pub fn SetRotation(self: Pin<&mut gp_Trsf>, axis: &gp_Ax1, angle: f64);
         pub fn SetScale(self: Pin<&mut gp_Trsf>, point: &gp_Pnt, scale: f64);
         pub fn SetTranslation(self: Pin<&mut gp_Trsf>, point1: &gp_Pnt, point2: &gp_Pnt);
+        pub fn Value(self: &gp_Trsf, the_row: i32, the_col: i32) -> f64;
 
         #[cxx_name = "SetTranslationPart"]
         pub fn set_translation_vec(self: Pin<&mut gp_Trsf>, translation: &gp_Vec);
+
+        type gp_GTrsf;
+        #[cxx_name = "construct_unique"]
+        pub fn new_gp_GTrsf() -> UniquePtr<gp_GTrsf>;
+        pub fn SetValue(self: Pin<&mut gp_GTrsf>, the_row: i32, the_col: i32, the_value: f64);
+        pub fn Value(self: &gp_GTrsf, the_row: i32, the_col: i32) -> f64;
 
         type BRepBuilderAPI_MakeSolid;
 
@@ -950,6 +1051,20 @@ pub mod ffi {
         pub fn Shape(self: Pin<&mut BRepBuilderAPI_Transform>) -> &TopoDS_Shape;
         pub fn Build(self: Pin<&mut BRepBuilderAPI_Transform>, progress: &Message_ProgressRange);
         pub fn IsDone(self: &BRepBuilderAPI_Transform) -> bool;
+
+
+        type BRepBuilderAPI_GTransform;
+
+        #[cxx_name = "construct_unique"]
+        pub fn BRepBuilderAPI_GTransform_ctor(
+            shape: &TopoDS_Shape,
+            transform: &gp_GTrsf,
+            copy: bool,
+        ) -> UniquePtr<BRepBuilderAPI_GTransform>;
+
+        pub fn Shape(self: Pin<&mut BRepBuilderAPI_GTransform>) -> &TopoDS_Shape;
+        pub fn Build(self: Pin<&mut BRepBuilderAPI_GTransform>, progress: &Message_ProgressRange);
+        pub fn IsDone(self: &BRepBuilderAPI_GTransform) -> bool;
 
         // Topology Explorer
         type TopExp_Explorer;
@@ -1220,3 +1335,16 @@ pub mod ffi {
         );
     }
 }
+
+// Gross, but is this okay?
+unsafe impl Send for ffi::BRepBuilderAPI_MakeWire {}
+unsafe impl Send for ffi::TopoDS_Edge {}
+unsafe impl Send for ffi::TopoDS_Wire {}
+unsafe impl Send for ffi::TopoDS_Face {}
+unsafe impl Send for ffi::TopoDS_Shell {}
+unsafe impl Send for ffi::TopoDS_Solid {}
+unsafe impl Send for ffi::TopoDS_Compound {}
+unsafe impl Send for ffi::TopoDS_Shape {}
+
+unsafe impl Send for ffi::TopExp_Explorer {}
+unsafe impl Send for ffi::BRepFilletAPI_MakeChamfer {}
